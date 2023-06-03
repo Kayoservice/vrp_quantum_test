@@ -1,3 +1,4 @@
+import os
 from itertools import combinations, permutations
 from typing import Tuple
 
@@ -57,7 +58,7 @@ class OSMGraph:
         return graph
 
     def generate_fake_delivery_graph(self) -> Tuple[GeoSeries, MultiDiGraph, str]:
-        address = "La Madeleine,Nord,France"
+        address = os.environ["address"]
         center_lat, center_long = geocoder.geocode(query=address)
         print(f"Starting point is lat:{center_lat} long:{center_long}")
         graph = ox.graph_from_place(

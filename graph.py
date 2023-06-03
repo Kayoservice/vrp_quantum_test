@@ -1,16 +1,13 @@
-from operator import itemgetter
+from itertools import combinations, permutations
 from typing import Tuple
 
-import contextily as ctx
-import matplotlib.pyplot as plt
 import networkx as nx
 import osmnx as ox
-from geopandas import GeoDataFrame, GeoSeries
+from folium.plugins import Geocoder
+from geopandas import GeoSeries
 from geopy import distance
-from IPython.display import IFrame
 from networkx import MultiDiGraph
 from osmnx import geocoder
-from shapely.geometry import Point, Polygon
 
 
 class OSMGraph:
@@ -23,26 +20,40 @@ class OSMGraph:
         self.address = address
 
     def add_interest_points(
-        self, depot: str, graph: MultiDiGraph, delivery_points: GeoSeries
+        self, graph: MultiDiGraph, delivery_points: GeoSeries
     ) -> "MultiDiGraph":
+
         node_id = 1
         for point in delivery_points:
 
             print(f"processing point: {point}")
-            nearest_node = ox.distance.nearest_nodes(graph, point.x, point.y)
-            distance_found = distance.distance(
-                (graph.nodes[nearest_node]["y"], graph.nodes[nearest_node]["x"]),
-                (point.y, point.x),
+            self.add_connected_node_to_graph(
+                graph, node_id, {"goal": "delivery_point"}, point.x, point.y
             )
-            print(f"distance from {nearest_node} for {node_id} is {distance_found}")
-            # Add simulated delivery_point node
-            graph.add_node(node_id, x=point.x, y=point.y, attr={"goal": "delivery"})
-
-            # Add bidirectional edge
-            graph.add_edge(nearest_node, node_id, weight=distance_found.m)
-            graph.add_edge(node_id, nearest_node, weight=distance_found.m)
 
             node_id += 1
+        return graph
+
+    def add_connected_node_to_graph(
+        self,
+        graph: MultiDiGraph,
+        node,
+        node_goal: dict[str, str],
+        node_x,
+        node_y,
+        color="red",
+    ):
+
+        nearest_node = ox.distance.nearest_nodes(graph, node_x, node_y)
+        distance_found = distance.distance(
+            (graph.nodes[nearest_node]["y"], graph.nodes[nearest_node]["x"]),
+            (node_y, node_x),
+        )
+        print(f"distance from {nearest_node} for {node} is {distance_found}")
+        graph.add_node(node, x=node_x, y=node_y, attr=node_goal, color=color)
+        # Add bidirectional edge
+        graph.add_edge(nearest_node, node, weight=distance_found.m)
+        graph.add_edge(node, nearest_node, weight=distance_found.m)
         return graph
 
     def generate_fake_delivery_graph(self) -> Tuple[GeoSeries, MultiDiGraph, str]:
@@ -50,66 +61,74 @@ class OSMGraph:
         center_lat, center_long = geocoder.geocode(query=address)
         print(f"Starting point is lat:{center_lat} long:{center_long}")
         graph = ox.graph_from_place(
-            address, network_type="drive", simplify=False, truncate_by_edge=True
+            address, network_type="drive", simplify=False, clean_periphery=False
         )
-        (*_,) = ox.plot_graph(graph, bgcolor="b", show=False, close=False)
-        depot = ox.distance.nearest_nodes(graph, center_lat, center_long)
-        print(f"nearest node id from the center selected as a depot: {depot}")
-        # graph=ox.project_graph(graph)
-        delivery_points = ox.utils_geo.sample_points(graph.to_undirected(), 60)
+        graph = ox.project_graph(graph)
 
-        print("delivery points:", delivery_points)
-        return delivery_points, graph.to_undirected(), depot
+        return graph, center_lat, center_long
 
-    def add_all_edge_from_entrepot(
-        self, graph: MultiDiGraph, depot: str
-    ) -> MultiDiGraph:
-        for node in graph.nodes():
-            print(f"processing point: {node}")
-            distance_depot = distance.distance(
-                (graph.nodes[depot]["y"], graph.nodes[depot]["x"]),
-                (graph.nodes[node]["y"], graph.nodes[node]["x"]),
-            )
-            # add edge from entrepot
-            graph.add_edge(depot, node, weight=distance_depot.m)
-        return graph
+    def complete_graph(self, graph, nodes_list):
+        G = nx.empty_graph(len(nodes_list), graph)
+        if len(nodes_list) > 1:
+            if G.is_directed():
+                edges = permutations(nodes_list, 2)
+            else:
+                edges = combinations(nodes_list, 2)
+            G.add_edges_from(edges)
+        return G
+
+    def find_speed(self, row):
+        fast = [
+            "motorway",
+            "trunk",
+            "primary",
+            "secondary",
+            "motorway_link",
+            "trunk_link",
+            "primary_link",
+            "secondary_link",
+            "escape",
+            "track",
+        ]
+        slow = ["tertiary", "residential", "tertiary_link", "living_street"]
+        other = ["unclassified", "road", "service"]
+        if row["highway"] in fast:
+            return 90 / 3.6
+        elif row["highway"] in slow:
+            return 50 / 3.6
+        elif row["highway"] in other:
+            return 30 / 3.6
+        else:
+            return 20 / 3.6
 
     def generate_graph_from_address(self) -> Tuple[MultiDiGraph, str]:
         ox.config(log_console=True, use_cache=True)
 
-        delivery_points, graph, depot = self.generate_fake_delivery_graph()
-
-        print(
-            f"bus stop found used as fake deliveries: {len(delivery_points.to_dict())}"
+        graph, center_lat, center_long = self.generate_fake_delivery_graph()
+        graph = ox.consolidate_intersections(
+            graph, dead_ends=False, reconnect_edges=True, tolerance=15
         )
-        # Get the nearest nodes to bus stops
-        bus_stop_nodes = list(map(itemgetter(1), delivery_points.index.values))
-        print(bus_stop_nodes[:5])
-        nodes = [depot] + bus_stop_nodes
-        graph = ox.project_graph(graph)
+        print(f"bus stop found used as fake deliveries: {len(graph.nodes)}")
+
         graph = ox.utils_graph.remove_isolated_nodes(graph)
 
-        graph = ox.consolidate_intersections(
-            graph, rebuild_graph=True, tolerance=15, dead_ends=False
+        depot = ox.distance.nearest_nodes(graph, center_lat, center_long)
+
+        nodes_to_explore, edges = ox.graph_to_gdfs(
+            graph, edges=True, nodes=True, node_geometry=True
         )
-        print(nodes[:5])
-        graph = self.add_interest_points(depot, graph, delivery_points)
-        graph = self.add_all_edge_from_entrepot(graph, depot)
+        edges = edges.assign(speed=edges.apply(self.find_speed, axis=1))
+        edges["weight"] = round(edges["length"] / edges["speed"])
+        print("Depot location is: ", graph.nodes[depot]["x"], graph.nodes[depot]["y"])
+        graph = ox.graph_from_gdfs(nodes_to_explore, edges)
+        nodes_to_explore, edges = ox.graph_to_gdfs(
+            graph, edges=True, nodes=True, node_geometry=True
+        )
+        m = edges.explore(tiles="cartodbdarkmatter", cmap="plasma", column="weight")
+        m = nodes_to_explore.explore(m=m, legend=True)
 
-        # Get edges as GeoDataFrames
-        nodes_to_explore, edges = ox.graph_to_gdfs(graph, edges=True, nodes=True)
-
-        for _, edge in edges.fillna("").iterrows():
-            weight = None
-            if not edge["length"]:
-                weight = 0
-            else:
-                weight = round(edge["length"])
-            nx.set_edge_attributes(graph, weight, "weight")
-
-        m = edges.explore(tiles="cartodbdarkmatter", cmap="plasma", column="length")
-        m = nodes_to_explore.explore(m=m, color="pink")
+        Geocoder().add_to(m)
         m.save("test.html")
-        print(f"Number of points found: {len(nodes)}")
+        print(f"Number of points found: {len(graph.nodes)}")
 
         return graph, depot

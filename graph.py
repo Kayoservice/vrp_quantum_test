@@ -58,7 +58,7 @@ class OSMGraph:
         return graph
 
     def generate_fake_delivery_graph(self) -> Tuple[GeoSeries, MultiDiGraph, str]:
-        address = os.environ["address"]
+        address = self.address
         center_lat, center_long = geocoder.geocode(query=address)
         print(f"Starting point is lat:{center_lat} long:{center_long}")
         graph = ox.graph_from_place(
@@ -109,7 +109,7 @@ class OSMGraph:
         graph = ox.consolidate_intersections(
             graph, dead_ends=False, reconnect_edges=True, tolerance=15
         )
-        print(f"bus stop found used as fake deliveries: {len(graph.nodes)}")
+        print(f"nodes deliveries: {len(graph.nodes)}")
 
         graph = ox.utils_graph.remove_isolated_nodes(graph)
 

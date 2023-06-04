@@ -1,3 +1,4 @@
+import os
 import random
 
 import matplotlib.pyplot as plt
@@ -11,6 +12,8 @@ from qiskit.utils import algorithm_globals
 from qiskit_optimization.algorithms import MinimumEigenOptimizer
 from qiskit_optimization.applications.vehicle_routing import VehicleRouting
 
+from graph import OSMGraph
+
 
 # Get the data
 class VrpSolving:
@@ -21,12 +24,15 @@ class VrpSolving:
 
     def solve_vrp_problem(self):
         plt.figure()
+        # test again with random values
         graph: nx.DiGraph = nx.complete_graph(self.nodes, nx.DiGraph())
         for (start, end) in graph.edges:
             graph.edges[start, end]["weight"] = round(random.random())
         nx.draw(graph, with_labels=True, font_weight="bold")
         plt.savefig("graph.png")
-        problem_instance = VehicleRouting(graph, num_vehicles=self.vehicles, depot=2)
+        problem_instance = VehicleRouting(
+            graph, num_vehicles=self.vehicles, depot=self.depot
+        )
         problem_program = problem_instance.to_quadratic_program()
         quantum_optimizer = QuantumOptimizer(
             problem_instance, self.nodes, self.vehicles
@@ -36,6 +42,9 @@ class VrpSolving:
             problem_program
         )
         print(quantum_solution, quantum_cost)
+
+    def generate_graph(self):
+        return OSMGraph(500, os.environ["address"]).generate_graph_from_address()
 
 
 class QuantumOptimizer:
